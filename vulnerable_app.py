@@ -1,10 +1,13 @@
 from flask import Flask, request, render_template_string, session, redirect, url_for, flash
+from flask_wtf.csrf import CSRFProtect
 import sqlite3
 import os
 import hashlib
+import bcrypt
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+csrf = CSRFProtect(app)
+app.secret_key = 'mi_clave_secreta_4576'
 
 
 def get_db_connection():
@@ -14,7 +17,8 @@ def get_db_connection():
 
 
 def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode(), salt).decode()
 
 
 @app.route('/')
@@ -31,22 +35,17 @@ def login():
         conn = get_db_connection()
 
         # Inyección de SQL solo si se detecta un payload de inyección de SQL
-        if "' OR '" in password:
-            query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
-            user = conn.execute(query).fetchone()
-        else:
-            query = "SELECT * FROM users WHERE username = ? AND password = ?"
-            hashed_password = hash_password(password)
-            user = conn.execute(query, (username, hashed_password)).fetchone()
 
-        print("Consulta SQL generada:", query)
-
-        if user:
+        query = "SELECT * FROM users WHERE username = ? AND password = ?"
+        hashed_password = hash_password(password)
+        user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        if user and bcrypt.checkpw(password.encode(), user['password'].encode()):
             session['user_id'] = user['id']
             session['role'] = user['role']
             return redirect(url_for('dashboard'))
         else:
             return 'Invalid credentials!'
+        
     return '''
         <form method="post">
             Username: <input type="text" name="username"><br>
@@ -105,6 +104,13 @@ def delete_task(task_id):
         return redirect(url_for('login'))
 
     conn = get_db_connection()
+    task = conn.execute("SELECT * FROM tasks WHERE id = ? AND user_id = ?", 
+                       (task_id, session['user_id'])).fetchone()
+    
+    if task is None:
+        conn.close()
+        return 'No tienes permiso para borrar esta tarea!'
+
     conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     conn.commit()
     conn.close()
@@ -121,4 +127,4 @@ def admin():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
